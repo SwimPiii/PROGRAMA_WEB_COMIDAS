@@ -67,13 +67,6 @@
     return file.result.id;
   }
 
-  async function ensureFile() {
-    const folderId = await resolveFolder();
-    const file = await findFile(folderId, cfg.driveFileName);
-    if (file) state.fileId = file.id;
-    else state.fileId = await createJson(folderId, cfg.driveFileName, JSON.stringify({ version: 1, recipes: [], plans: {}, shopping: { extras: [], checked: {} }, lastUpdated: new Date().toISOString() }));
-  }
-
   function baseName() { return String(cfg.driveFileName).replace(/\.json$/i, ""); }
   function stamp(date) { return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z").replace("T", "_").replace("Z", ""); }
   function manifestName() { return `${baseName()}__backups_manifest.json`; }
@@ -200,7 +193,9 @@
           if (!response || !response.access_token) throw new Error("Google no devolvió un token de acceso.");
           window.gapi.client.setToken({ access_token: response.access_token });
           state.signedIn = true;
-          await ensureFile();
+          const folderId = await resolveFolder();
+          const dataFile = await findFile(folderId, cfg.driveFileName);
+          state.fileId = dataFile ? dataFile.id : null;
           const data = await load();
           resolve(data);
         } catch (error) { state.lastError = error; state.signedIn = false; reject(error); }
@@ -212,7 +207,7 @@
 
   async function load() {
     if (!state.signedIn) throw new Error("Conecta con Google Drive para cargar los datos.");
-    if (!state.fileId) await ensureFile();
+    if (!state.fileId) return { version: 1, recipes: [], plans: {}, shopping: { extras: [], checked: {} }, lastUpdated: null };
     const response = await window.gapi.client.drive.files.get({ fileId: state.fileId, alt: "media" });
     const data = response.result;
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("El archivo de datos de Drive no tiene un formato válido.");
@@ -221,9 +216,15 @@
 
   async function save(payload) {
     if (!state.signedIn) throw new Error("Conecta con Google Drive antes de guardar.");
-    if (!state.fileId) await ensureFile();
     const folderId = await resolveFolder();
-    await upload(state.fileId, JSON.stringify(payload), cfg.driveFileName);
+    if (!state.fileId) {
+      const existing = await findFile(folderId, cfg.driveFileName);
+      state.fileId = existing ? existing.id : null;
+      if (!state.fileId) state.fileId = await createJson(folderId, cfg.driveFileName, JSON.stringify(payload));
+      else await upload(state.fileId, JSON.stringify(payload), cfg.driveFileName);
+    } else {
+      await upload(state.fileId, JSON.stringify(payload), cfg.driveFileName);
+    }
     await saveBackup(payload, folderId);
   }
 
