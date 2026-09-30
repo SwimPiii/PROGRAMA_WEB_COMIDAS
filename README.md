@@ -1,6 +1,6 @@
 # La mesa · Programa web de comidas
 
-Aplicación web privada y adaptable a móviles para organizar comidas y cenas, guardar recetas, planificar semanas y preparar la compra. Los datos se guardan en Google Drive usando el mismo patrón que PROGRAMA_WEB_COLECCION: autenticación OAuth en el navegador, un JSON principal y una rotación de 10 copias de seguridad.
+Aplicación web adaptable a móviles para organizar comidas y cenas, guardar recetas, planificar semanas y preparar la compra. Los datos se guardan en Google Drive con autenticación OAuth en el navegador y un JSON principal.
 
 ## Guardado en Drive
 
@@ -8,24 +8,25 @@ Aplicación web privada y adaptable a móviles para organizar comidas y cenas, g
 - Carpeta: `PROGRAMA_WEB_COMIDAS`.
 - Folder ID configurado: `1dEk--6BKJdkxGUeuGiP3MncgjTUvMdTI`.
 - Datos: `comidas_semana_db.json`.
-- Copias: hasta 10 archivos `comidas_semana_db__backup_...json` y un manifiesto en esa misma carpeta.
-- La app requiere conexión a internet y autorización de Drive antes de usarla. Cada cambio actualiza el JSON y crea una copia de seguridad. No se conserva una copia local ni hay fusión de cambios simultáneos; si se usa en dos dispositivos a la vez, conviene recargar antes de editar desde el segundo.
+- Copias: organizadas en subcarpetas `PROGRAMA_WEB_COMIDAS/año/mes/`, por ejemplo `2026/09/`; cada carpeta mensual conserva un máximo rotativo de 10 copias y su manifiesto.
+- Las copias antiguas que estuvieran en la raíz se trasladan automáticamente a su carpeta año/mes durante el siguiente guardado.
+- La app requiere conexión a internet y autorización de Drive antes de sincronizar. Cada cambio actualiza el JSON y crea una copia de seguridad. El modo de prueba sí conserva datos locales en el navegador, pero estos no se sincronizan con Drive. No hay fusión de cambios simultáneos; si se usa en dos dispositivos a la vez, conviene recargar antes de editar desde el segundo.
 
 ## Requisitos de Google OAuth
 
-La app utiliza el mismo Client ID web público que PROGRAMA_WEB_COLECCION; no incluye Client Secret. En Google Cloud deben estar habilitados Google Drive API, la pantalla de consentimiento y el origen web desde el que se publique/abra la app. Para usar la URL local de abajo, autoriza `http://localhost:5511` en los orígenes autorizados del cliente OAuth. El primer acceso solicita permiso de Drive.
+La app utiliza un Client ID web público propio; no incluye Client Secret. En Google Cloud deben estar habilitados Google Drive API, la pantalla de consentimiento y el origen web desde el que se publique/abra la app. Autoriza `https://swimpiii.github.io` para GitHub Pages y `http://localhost:5512` para la prueba local. El primer acceso solicita permiso de Drive.
 
-La cuenta de Google que autorice debe tener acceso a la carpeta indicada. El correo configurado es solo una sugerencia para el selector de cuenta, no restringe qué cuenta puede autorizarse.
+La cuenta de Google que autorice debe tener acceso a la carpeta indicada. Si el proyecto OAuth sigue en modo de prueba, añade cada cuenta autorizada en la lista de usuarios de prueba.
 
 ## Ejecutar en local
 
 Desde esta carpeta, inicia un servidor estático con Python:
 
 ```powershell
-python -m http.server 5511
+python -m http.server 5512
 ```
 
-Abre `http://localhost:5511/` en el navegador. No abras `index.html` directamente como archivo: OAuth necesita un origen HTTP/HTTPS.
+Abre `http://localhost:5512/` en el navegador. No abras `index.html` directamente como archivo: OAuth necesita un origen HTTP/HTTPS.
 
 ## Publicar en GitHub Pages
 

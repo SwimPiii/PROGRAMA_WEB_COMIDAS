@@ -78,27 +78,115 @@
   function stamp(date) { return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z").replace("T", "_").replace("Z", ""); }
   function manifestName() { return `${baseName()}__backups_manifest.json`; }
 
-  async function saveBackup(payload, folderId) {
-    const manifestFile = await findFile(folderId, manifestName());
-    let manifest = { nextSlot: 1, slots: {} };
-    if (manifestFile) {
-      try {
-        const result = await window.gapi.client.drive.files.get({ fileId: manifestFile.id, alt: "media" });
-        if (result.result && typeof result.result === "object") manifest = result.result;
-      } catch (error) { state.lastError = error; }
+  function emptyManifest() { return { nextSlot: 1, latestSlot: null, latestSavedAt: "", slots: {} }; }
+
+  async function readManifest(folderId) {
+    const file = await findFile(folderId, manifestName());
+    if (!file) return { fileId: null, manifest: emptyManifest() };
+    const result = await window.gapi.client.drive.files.get({ fileId: file.id, alt: "media" });
+    if (!result.result || typeof result.result !== "object" || Array.isArray(result.result)) {
+      throw new Error(`El manifiesto de backups ${manifestName()} no tiene un formato válido.`);
     }
+    return { fileId: file.id, manifest: { ...emptyManifest(), ...result.result, slots: result.result.slots && typeof result.result.slots === "object" ? result.result.slots : {} } };
+  }
+
+  async function writeManifest(folderId, fileId, manifest) {
+    const content = JSON.stringify(manifest);
+    if (fileId) await upload(fileId, content, manifestName());
+    else await createJson(folderId, manifestName(), content);
+  }
+
+  async function getOrCreateFolder(parentId, name) {
+    const query = `name='${quote(name)}' and '${quote(parentId)}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+    const response = await window.gapi.client.drive.files.list({ q: query, pageSize: 10, fields: "files(id,name)" });
+    if (response.result.files && response.result.files.length) return response.result.files[0].id;
+    const created = await window.gapi.client.drive.files.create({ resource: { name, mimeType: "application/vnd.google-apps.folder", parents: [parentId] }, fields: "id" });
+    return created.result.id;
+  }
+
+  async function getBackupMonthFolder(rootFolderId, date) {
+    const yearName = String(date.getFullYear());
+    const monthName = String(date.getMonth() + 1).padStart(2, "0");
+    const yearFolderId = await getOrCreateFolder(rootFolderId, yearName);
+    return getOrCreateFolder(yearFolderId, monthName);
+  }
+
+  function firstFreeSlot(slots) {
+    for (let slot = 1; slot <= BACKUP_SLOTS; slot++) {
+      if (!slots[String(slot)]) return slot;
+    }
+    const used = Object.keys(slots).map(Number).filter(Number.isFinite);
+    return Math.max(BACKUP_SLOTS, ...used) + 1;
+  }
+
+  async function migrateRootBackups(rootFolderId) {
+    const legacyFile = await findFile(rootFolderId, manifestName());
+    if (!legacyFile) return;
+
+    const { manifest: legacyManifest } = await readManifest(rootFolderId);
+    for (const [oldSlot, entry] of Object.entries(legacyManifest.slots)) {
+      if (!entry || !entry.fileId) continue;
+      let file;
+      try {
+        const response = await window.gapi.client.drive.files.get({ fileId: entry.fileId, fields: "id,name,parents,modifiedTime" });
+        file = response.result;
+      } catch (error) {
+        if (error.status === 404) continue;
+        throw error;
+      }
+
+      let savedAt = entry.savedAt || "";
+      if (!savedAt || Number.isNaN(new Date(savedAt).getTime())) {
+        const backup = await window.gapi.client.drive.files.get({ fileId: file.id, alt: "media" });
+        savedAt = backup.result && backup.result.backupMetadata && backup.result.backupMetadata.savedAt || file.modifiedTime || new Date().toISOString();
+      }
+      const savedDate = new Date(savedAt);
+      const safeDate = Number.isNaN(savedDate.getTime()) ? new Date() : savedDate;
+      const monthFolderId = await getBackupMonthFolder(rootFolderId, safeDate);
+      const { fileId: monthlyManifestId, manifest: monthlyManifest } = await readManifest(monthFolderId);
+      const alreadyRegistered = Object.values(monthlyManifest.slots).some(slot => slot && slot.fileId === file.id);
+
+      if (!alreadyRegistered) {
+        const slot = monthlyManifest.slots[String(oldSlot)] ? firstFreeSlot(monthlyManifest.slots) : Number(oldSlot);
+        const safeSlot = Number.isInteger(slot) && slot > 0 ? slot : firstFreeSlot(monthlyManifest.slots);
+        const parents = file.parents || [];
+        if (!parents.includes(monthFolderId)) {
+          await window.gapi.client.drive.files.update({ fileId: file.id, addParents: monthFolderId, removeParents: parents.join(","), fields: "id,parents" });
+        }
+        monthlyManifest.slots[String(safeSlot)] = { fileId: file.id, fileName: file.name || entry.fileName, savedAt };
+        const latest = monthlyManifest.latestSavedAt && new Date(monthlyManifest.latestSavedAt) > safeDate ? monthlyManifest.latestSavedAt : savedAt;
+        const freeSlot = firstFreeSlot(monthlyManifest.slots);
+        monthlyManifest.nextSlot = freeSlot <= BACKUP_SLOTS ? freeSlot : 1;
+        monthlyManifest.latestSlot = safeSlot;
+        monthlyManifest.latestSavedAt = latest;
+        await writeManifest(monthFolderId, monthlyManifestId, monthlyManifest);
+      }
+    }
+
+    await window.gapi.client.drive.files.delete({ fileId: legacyFile.id });
+  }
+
+  async function saveBackup(payload, rootFolderId) {
+    await migrateRootBackups(rootFolderId);
+    const savedDate = new Date();
+    const savedAt = savedDate.toISOString();
+    const monthFolderId = await getBackupMonthFolder(rootFolderId, savedDate);
+    const { fileId: manifestFileId, manifest } = await readManifest(monthFolderId);
     const slot = Number(manifest.nextSlot) >= 1 && Number(manifest.nextSlot) <= BACKUP_SLOTS ? Number(manifest.nextSlot) : 1;
-    const old = manifest.slots && manifest.slots[String(slot)];
+    const old = manifest.slots[String(slot)];
     if (old && old.fileId) {
       try { await window.gapi.client.drive.files.delete({ fileId: old.fileId }); }
       catch (error) { if (error.status !== 404) throw error; }
     }
-    const savedAt = new Date().toISOString();
-    const fileName = `${baseName()}__backup_${String(slot).padStart(2, "0")}__${stamp(new Date(savedAt))}.json`;
-    const id = await createJson(folderId, fileName, JSON.stringify({ backupMetadata: { slot, savedAt, sourceFileName: cfg.driveFileName }, state: payload }));
-    manifest = { nextSlot: slot === BACKUP_SLOTS ? 1 : slot + 1, latestSlot: slot, latestSavedAt: savedAt, slots: { ...(manifest.slots || {}), [String(slot)]: { fileId: id, fileName, savedAt } } };
-    if (manifestFile) await upload(manifestFile.id, JSON.stringify(manifest), manifestName());
-    else await createJson(folderId, manifestName(), JSON.stringify(manifest));
+    const fileName = `${baseName()}__backup_${String(slot).padStart(2, "0")}__${stamp(savedDate)}.json`;
+    const backupId = await createJson(monthFolderId, fileName, JSON.stringify({ backupMetadata: { slot, savedAt, sourceFileName: cfg.driveFileName }, state: payload }));
+    const updated = {
+      nextSlot: slot === BACKUP_SLOTS ? 1 : slot + 1,
+      latestSlot: slot,
+      latestSavedAt: savedAt,
+      slots: { ...manifest.slots, [String(slot)]: { fileId: backupId, fileName, savedAt } }
+    };
+    await writeManifest(monthFolderId, manifestFileId, updated);
   }
 
   async function signIn() {
