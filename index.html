@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f5f0">
+  <meta name="description" content="Planificador semanal de comidas, cenas y compra para casa.">
+  <title>Organizador de la compra</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
+  <script src="config.js" defer></script>
+  <script src="drive.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-right">
+        <span class="sync-status" id="sync-status"><span class="status-dot"></span><span id="sync-label">Conecta para empezar</span></span>
+        <button class="button button-outline button-small" id="connect-button" type="button">Conectar Drive</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <div><h1>Organizador de la compra</h1></div>
+        <div class="intro-sticker" aria-hidden="true"><span>♥</span><small>hecho<br>en casa</small></div>
+      </section>
+
+      <nav class="tabs" aria-label="Secciones principales" role="tablist">
+        <button class="tab active" id="tab-plan" role="tab" aria-selected="true" aria-controls="panel-plan" data-panel="plan"><span>01</span> Planificación</button>
+        <button class="tab" id="tab-recipes" role="tab" aria-selected="false" aria-controls="panel-recipes" data-panel="recipes"><span>02</span> Listado platos <b class="tab-count" id="recipe-count">0</b></button>
+        <button class="tab" id="tab-shopping" role="tab" aria-selected="false" aria-controls="panel-shopping" data-panel="shopping"><span>03</span> Cesta de la compra <b class="tab-count" id="cart-count">0</b></button>
+      </nav>
+
+      <div id="connection-notice" class="notice"><span class="notice-icon">☁</span><div><strong>Conecta con Google Drive para guardar en la nube</strong><p>O prueba primero sin configurar Drive. El modo de prueba guarda los datos solo en este navegador.</p></div><div class="notice-actions"><button class="button button-outline" id="demo-button" type="button">Probar sin Drive</button><button class="button button-dark" id="notice-connect" type="button">Conectar Drive</button></div></div>
+
+      <section class="panel active" id="panel-plan" role="tabpanel" aria-labelledby="tab-plan">
+        <div class="section-heading plan-heading">
+          <div><h2>Planificación</h2></div>
+          <button class="button button-primary" id="generate-button" type="button" disabled><span>✦</span> Sortear semana</button>
+        </div>
+        <div class="week-toolbar">
+          <div class="week-nav"><button class="icon-button" id="previous-week" type="button" aria-label="Semana anterior">←</button><div><strong id="week-label">—</strong><span id="today-label"></span></div><button class="icon-button" id="next-week" type="button" aria-label="Semana siguiente">→</button></div>
+          <button class="text-button" id="current-week" type="button">Ir a esta semana</button>
+        </div>
+        <p class="helper-line">De lunes a viernes puedes sortear; sábado y domingo se rellenan a mano.</p>
+        <div class="week-grid" id="week-grid"></div>
+      </section>
+
+      <section class="panel" id="panel-recipes" role="tabpanel" aria-labelledby="tab-recipes" hidden>
+        <div class="section-heading"><div><h2>Listado de platos</h2></div></div>
+        <div class="recipe-layout">
+          <form id="recipe-form" class="card recipe-form">
+            <div class="form-title"><span class="form-icon">＋</span><div><h3 id="form-heading">Añadir un plato</h3><p>Los campos con * son obligatorios</p></div></div>
+            <input type="hidden" id="recipe-id">
+            <label class="field-label" for="meal-type">Tipo de plato <span>*</span></label>
+            <div class="segmented"><label><input type="radio" name="meal-type" value="comida" checked><span>☀ Comida</span></label><label><input type="radio" name="meal-type" value="cena"><span>☾ Cena</span></label></div>
+            <label class="field-label" for="recipe-name">Nombre del plato <span>*</span></label>
+            <input class="input" id="recipe-name" type="text" maxlength="100" placeholder="Ej. Arroz con pollo" required>
+            <div class="ingredients-title"><label class="field-label">Ingredientes <span>*</span></label><span class="muted-small">Cantidad en gramos</span></div>
+            <div id="ingredient-rows" class="ingredient-rows"></div>
+            <button class="add-line-button" id="add-ingredient" type="button">＋ Añadir ingrediente</button>
+            <label class="field-label" for="exclusion-tags">Etiqueta de exclusión</label>
+            <input class="input" id="exclusion-tags" type="text" maxlength="120" placeholder="Ej. arroz, pollo">
+            <p class="field-hint">Separadas por comas. Dos platos con una etiqueta común no saldrán el mismo día.</p>
+            <div class="form-actions"><button class="button button-primary" id="save-recipe" type="submit">Guardar plato</button><button class="button button-quiet" id="cancel-edit" type="button" hidden>Cancelar</button></div>
+          </form>
+          <div class="recipe-list-wrap"><div class="list-toolbar"><div><h3>Mis platos</h3><span id="recipe-summary" class="muted-small">0 platos guardados</span></div><div class="filter-pills" role="group" aria-label="Filtrar platos"><button class="filter-pill active" data-filter="todos" type="button">Todos</button><button class="filter-pill" data-filter="comida" type="button">Comidas</button><button class="filter-pill" data-filter="cena" type="button">Cenas</button></div></div><div class="recipe-list" id="recipe-list"></div></div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-shopping" role="tabpanel" aria-labelledby="tab-shopping" hidden>
+        <div class="section-heading"><div><h2>Cesta de la compra</h2></div></div>
+        <div class="cart-week-bar"><div class="cart-week-icon">▦</div><div><strong id="cart-week-title">Compra de la semana</strong><span id="cart-week-caption">Los ingredientes se calculan con el menú planificado.</span></div><button class="button button-outline button-small" id="cart-go-week" type="button">Ver planificación →</button></div>
+        <form class="add-shopping-form card" id="shopping-form"><div class="shopping-form-heading"><span class="form-icon">＋</span><div><h3>Añadir a la cesta</h3><p>También podéis añadir productos de casa que no son de un plato.</p></div></div><div class="shopping-fields"><label class="sr-only" for="shopping-name">Producto o ingrediente</label><input class="input" id="shopping-name" type="text" maxlength="100" placeholder="Ej. detergente, leche…" required><label class="sr-only" for="shopping-quantity">Cantidad</label><input class="input quantity-input" id="shopping-quantity" type="number" min="0" step="any" placeholder="Cant."><label class="sr-only" for="shopping-unit">Unidad</label><input class="input unit-input" id="shopping-unit" type="text" maxlength="20" value="unidad" placeholder="Unidad"><button class="button button-dark" type="submit">Añadir</button></div></form>
+        <div class="cart-progress"><div><strong id="cart-progress-label">0 de 0 productos comprados</strong><span id="cart-progress-percent">0%</span></div><div class="progress-track"><span id="cart-progress-bar"></span></div></div>
+        <div class="shopping-list" id="shopping-list"></div>
+        <p class="cart-empty-note" id="cart-empty-note" hidden>¡Todo listo! No hay nada pendiente para esta semana.</p>
+      </section>
+      <footer class="footer"><span>Organizador de la compra</span></footer>
+    </main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </div>
+</body>
+</html>
