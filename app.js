@@ -7,9 +7,10 @@
   const DEMO_STORAGE_KEY = "la-mesa-demo-v1";
   let state = emptyState();
   let demoMode = false;
+  let dirty = false;
+  let saving = false;
   let weekStart = mondayOf(new Date());
   let recipeFilter = "todos";
-  let saveChain = Promise.resolve();
   let toastTimer;
 
   function emptyState() { return { version: 1, recipes: [], plans: {}, shopping: { extras: [], checked: {} }, lastUpdated: null }; }
@@ -25,6 +26,13 @@
   function connected() { return window.comidasDrive && window.comidasDrive.isSignedIn(); }
   function canEdit() { return connected() || demoMode; }
   function requireEditing() { if (canEdit()) return true; showToast("Pulsa «Probar sin Drive» o conecta Google Drive para empezar."); return false; }
+  function updateSaveButton() {
+    const button = $("#save-button");
+    if (!button) return;
+    button.disabled = !canEdit() || !dirty || saving;
+    button.textContent = saving ? "Guardando…" : "Guardar";
+    button.classList.toggle("has-changes", dirty);
+  }
 
   function normalizeState(raw) {
     const value = raw && typeof raw === "object" ? raw : {};
@@ -39,33 +47,40 @@
 
   function persist() {
     if (!requireEditing()) return Promise.resolve(false);
+    dirty = true;
+    setStatus(demoMode && !connected() ? "Prueba · cambios sin guardar" : "Cambios sin guardar");
+    updateSaveButton();
+    return Promise.resolve(true);
+  }
+
+  async function saveChanges() {
+    if (!requireEditing() || saving) return false;
+    if (!dirty) { showToast("No hay cambios pendientes para guardar."); return true; }
+    saving = true;
     state.lastUpdated = new Date().toISOString();
-    if (demoMode && !connected()) {
-      try {
-        localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(state));
-        setStatus("Modo prueba · guardado local", "connected");
-        return Promise.resolve(true);
-      } catch (error) {
-        setStatus("No se pudo guardar localmente", "");
-        showToast("El navegador no pudo guardar los datos de prueba.");
-        return Promise.resolve(false);
-      }
-    }
-    setStatus("Guardando…", "busy");
     const snapshot = JSON.stringify(state);
-    saveChain = saveChain.catch(() => {}).then(() => window.comidasDrive.save(JSON.parse(snapshot))).then(() => {
-      setStatus("Guardado en Drive", "connected");
-      return true;
-    }).catch(error => {
-      console.error("No se pudo guardar en Drive", error);
+    setStatus("Guardando…", "busy");
+    updateSaveButton();
+    try {
+      if (demoMode && !connected()) localStorage.setItem(DEMO_STORAGE_KEY, snapshot);
+      else await window.comidasDrive.save(JSON.parse(snapshot));
+      dirty = JSON.stringify(state) !== snapshot;
+      setStatus(dirty ? "Hay cambios sin guardar" : demoMode && !connected() ? "Modo prueba · guardado local" : "Guardado en Drive", dirty ? "" : "connected");
+      showToast(dirty ? "Se guardó una parte; quedan cambios pendientes." : demoMode && !connected() ? "Guardado en este navegador (modo prueba)." : "Guardado en Google Drive.");
+      return !dirty;
+    } catch (error) {
+      console.error("No se pudo guardar", error);
       setStatus("Error al guardar", "");
       showToast(`No se pudo guardar: ${error.message || "comprueba la conexión"}`);
       return false;
-    });
-    return saveChain;
+    } finally {
+      saving = false;
+      updateSaveButton();
+    }
   }
 
   async function connect() {
+    if (demoMode && dirty && !confirm("Hay cambios de prueba sin guardar. Al conectar, se sustituirán por los datos de Drive. ¿Continuar?")) return;
     const buttons = [$("#connect-button"), $("#notice-connect")];
     buttons.forEach(button => { button.disabled = true; });
     setStatus("Conectando…", "busy");
@@ -73,6 +88,7 @@
       const data = await window.comidasDrive.signIn();
       state = normalizeState(data);
       demoMode = false;
+      dirty = false;
       renderAll();
       $("#connection-notice").classList.remove("visible");
       $("#connect-button").textContent = "Drive conectado";
@@ -90,10 +106,12 @@
 
   async function disconnect() {
     if (!connected()) return connect();
+    if (dirty && !confirm("Hay cambios sin guardar. Si desconectas ahora, se perderán. ¿Quieres continuar?")) return;
     if (!confirm("¿Desconectar Google Drive? Los datos seguirán guardados en la nube.")) return;
     await window.comidasDrive.signOut();
     state = emptyState();
     demoMode = false;
+    dirty = false;
     renderAll();
     enableEditing(false);
     $("#connect-button").textContent = "Conectar Drive";
@@ -112,13 +130,14 @@
       state = emptyState();
     }
     demoMode = true;
+    dirty = false;
     $("#connection-notice").classList.remove("visible");
     $("#connect-button").textContent = "Conectar Drive";
     $("#connect-button").title = "Los datos de prueba están guardados solo en este navegador.";
     setStatus("Modo prueba · guardado local", "connected");
     renderAll();
     enableEditing(true);
-    showToast("Modo de prueba activo. Los cambios se guardan solo en este navegador.");
+    showToast("Modo de prueba activo. Pulsa Guardar para conservar los cambios en este navegador.");
   }
 
   function enableEditing(enabled) {
@@ -130,6 +149,7 @@
     $$(".meal-select").forEach(select => { select.disabled = !enabled; });
     $$(".check-box, .shopping-delete, .recipe-edit, .recipe-delete").forEach(button => { button.disabled = !enabled; });
     $("#add-ingredient").disabled = !enabled;
+    updateSaveButton();
   }
 
   function switchPanel(name) {
@@ -249,7 +269,7 @@
         if (!state.plans[date].comida && !state.plans[date].cena) delete state.plans[date];
       });
     } else state.recipes.push(recipe);
-    resetRecipeForm(); renderAll(); await persist(); showToast(index >= 0 ? "Cambios guardados." : "Plato añadido al recetario.");
+    resetRecipeForm(); renderAll(); await persist(); showToast(index >= 0 ? "Plato actualizado. Pulsa Guardar para conservarlo." : "Plato añadido. Pulsa Guardar para conservarlo.");
   }
 
   function generateWeek() {
@@ -278,7 +298,7 @@
     }
     if (!solve(0)) { showToast("No hay suficientes platos compatibles para completar de lunes a viernes. Añade más recetas o ajusta sus etiquetas."); return; }
     dates.forEach(date => { state.plans[date] = { comida: chosen[`${date}|comida`], cena: chosen[`${date}|cena`] }; });
-    renderAll(); persist(); showToast("¡Semana sorteada! Puedes cambiar cualquier plato.");
+    renderAll(); persist(); showToast("¡Semana sorteada! Puedes cambiarla y pulsar Guardar cuando quieras.");
   }
   function shuffle(array) { for(let i=array.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[array[i],array[j]]=[array[j],array[i]];} }
 
@@ -335,13 +355,13 @@
     const duplicate=state.shopping.extras.find(item=>item.weekStart===start&&normalizeText(item.name)===normalizeText(name)&&normalizeText(item.unit||"unidad")==normalizeText(unit));
     if(duplicate) duplicate.quantity=(Number(duplicate.quantity)||0)+quantity;
     else state.shopping.extras.push({id:id(),weekStart:start,name,quantity,unit});
-    $("#shopping-form").reset(); $("#shopping-unit").value="unidad"; renderShopping(); await persist(); showToast("Añadido a la cesta.");
+    $("#shopping-form").reset(); $("#shopping-unit").value="unidad"; renderShopping(); await persist(); showToast("Añadido a la cesta. Pulsa Guardar para conservarlo.");
   }
 
   function renderAll() { renderWeek(); renderRecipes(); renderShopping(); enableEditing(canEdit()); }
   function init() {
     $$(".tab").forEach(tab=>tab.addEventListener("click",()=>switchPanel(tab.dataset.panel)));
-    $("#connect-button").addEventListener("click",()=>connected()?disconnect():connect()); $("#notice-connect").addEventListener("click",connect); $("#demo-button").addEventListener("click",startDemo);
+    $("#connect-button").addEventListener("click",()=>connected()?disconnect():connect()); $("#notice-connect").addEventListener("click",connect); $("#demo-button").addEventListener("click",startDemo); $("#save-button").addEventListener("click",saveChanges);
     $("#previous-week").addEventListener("click",()=>{weekStart=plusDays(weekStart,-7);renderAll();});
     $("#next-week").addEventListener("click",()=>{weekStart=plusDays(weekStart,7);renderAll();});
     $("#current-week").addEventListener("click",()=>{weekStart=mondayOf(new Date());renderAll();});
@@ -354,6 +374,11 @@
     addIngredientRow(); $("#connection-notice").classList.add("visible");
     try { if (localStorage.getItem(DEMO_STORAGE_KEY)) $("#demo-button").textContent = "Continuar prueba local"; } catch { /* almacenamiento no disponible */ }
     renderAll(); enableEditing(false);
+    window.addEventListener("beforeunload", event => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
   }
   document.addEventListener("DOMContentLoaded",init);
 })();

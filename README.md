@@ -8,9 +8,9 @@ Aplicación web adaptable a móviles para organizar comidas y cenas, guardar rec
 - Carpeta: `PROGRAMA_WEB_COMIDAS`.
 - Folder ID configurado: `1dEk--6BKJdkxGUeuGiP3MncgjTUvMdTI`.
 - Datos: `comidas_semana_db.json`.
-- Copias: organizadas en subcarpetas `PROGRAMA_WEB_COMIDAS/año/mes/`, por ejemplo `2026/09/`; cada carpeta mensual conserva un máximo rotativo de 10 copias y su manifiesto.
-- Las copias antiguas que estuvieran en la raíz se trasladan automáticamente a su carpeta año/mes durante el siguiente guardado.
-- La app requiere conexión a internet y autorización de Drive antes de sincronizar. Cada cambio actualiza el JSON y crea una copia de seguridad. El modo de prueba sí conserva datos locales en el navegador, pero estos no se sincronizan con Drive. No hay fusión de cambios simultáneos; si se usa en dos dispositivos a la vez, conviene recargar antes de editar desde el segundo.
+- Copias: guardadas en subcarpetas de año/mes, por ejemplo `PROGRAMA_WEB_COMIDAS/2026/09/`.
+- Retención: cinco copias más recientes en total, con un único manifiesto en la raíz. Las copias anteriores que estén en la raíz se trasladan a sus carpetas fechadas; las que excedan el límite se eliminan durante el siguiente guardado.
+- La app requiere conexión a internet y autorización de Drive antes de sincronizar. Los cambios quedan pendientes en memoria hasta pulsar **Guardar**. Al intentar cerrar la página con cambios pendientes, el navegador advierte que se pueden perder: no se intenta guardar de forma asíncrona durante el cierre porque el navegador no garantiza que una petición a Drive finalice. El modo de prueba persiste localmente solo al pulsar **Guardar**. No hay fusión de cambios simultáneos; si se usa en dos dispositivos a la vez, conviene recargar antes de editar desde el segundo.
 
 ## Requisitos de Google OAuth
 

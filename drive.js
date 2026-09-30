@@ -2,7 +2,7 @@
   const cfg = window.COMIDAS_CONFIG || {};
   const state = { initialized: false, signedIn: false, folderId: cfg.driveFolderId || null, fileId: null, lastError: null };
   let tokenClient = null;
-  const BACKUP_SLOTS = 10;
+  const BACKUP_SLOTS = 5;
 
   function waitFor(predicate, timeoutMs = 12000) {
     const started = Date.now();
@@ -111,20 +111,13 @@
     return getOrCreateFolder(yearFolderId, monthName);
   }
 
-  function firstFreeSlot(slots) {
-    for (let slot = 1; slot <= BACKUP_SLOTS; slot++) {
-      if (!slots[String(slot)]) return slot;
-    }
-    const used = Object.keys(slots).map(Number).filter(Number.isFinite);
-    return Math.max(BACKUP_SLOTS, ...used) + 1;
-  }
-
   async function migrateRootBackups(rootFolderId) {
     const legacyFile = await findFile(rootFolderId, manifestName());
     if (!legacyFile) return;
 
-    const { manifest: legacyManifest } = await readManifest(rootFolderId);
-    for (const [oldSlot, entry] of Object.entries(legacyManifest.slots)) {
+    const { manifest: oldManifest } = await readManifest(rootFolderId);
+    const entries = [];
+    for (const [oldSlot, entry] of Object.entries(oldManifest.slots)) {
       if (!entry || !entry.fileId) continue;
       let file;
       try {
@@ -142,28 +135,37 @@
       }
       const savedDate = new Date(savedAt);
       const safeDate = Number.isNaN(savedDate.getTime()) ? new Date() : savedDate;
-      const monthFolderId = await getBackupMonthFolder(rootFolderId, safeDate);
-      const { fileId: monthlyManifestId, manifest: monthlyManifest } = await readManifest(monthFolderId);
-      const alreadyRegistered = Object.values(monthlyManifest.slots).some(slot => slot && slot.fileId === file.id);
-
-      if (!alreadyRegistered) {
-        const slot = monthlyManifest.slots[String(oldSlot)] ? firstFreeSlot(monthlyManifest.slots) : Number(oldSlot);
-        const safeSlot = Number.isInteger(slot) && slot > 0 ? slot : firstFreeSlot(monthlyManifest.slots);
-        const parents = file.parents || [];
-        if (!parents.includes(monthFolderId)) {
-          await window.gapi.client.drive.files.update({ fileId: file.id, addParents: monthFolderId, removeParents: parents.join(","), fields: "id,parents" });
-        }
-        monthlyManifest.slots[String(safeSlot)] = { fileId: file.id, fileName: file.name || entry.fileName, savedAt };
-        const latest = monthlyManifest.latestSavedAt && new Date(monthlyManifest.latestSavedAt) > safeDate ? monthlyManifest.latestSavedAt : savedAt;
-        const freeSlot = firstFreeSlot(monthlyManifest.slots);
-        monthlyManifest.nextSlot = freeSlot <= BACKUP_SLOTS ? freeSlot : 1;
-        monthlyManifest.latestSlot = safeSlot;
-        monthlyManifest.latestSavedAt = latest;
-        await writeManifest(monthFolderId, monthlyManifestId, monthlyManifest);
-      }
+      entries.push({ oldSlot: Number(oldSlot), entry, file, savedAt, safeDate });
     }
 
-    await window.gapi.client.drive.files.delete({ fileId: legacyFile.id });
+    entries.sort((a, b) => a.safeDate - b.safeDate);
+    const retained = entries.slice(-BACKUP_SLOTS);
+    const removed = entries.slice(0, Math.max(0, entries.length - BACKUP_SLOTS));
+    for (const backup of removed) {
+      try { await window.gapi.client.drive.files.delete({ fileId: backup.file.id }); }
+      catch (error) { if (error.status !== 404) throw error; }
+    }
+
+    const migratedSlots = {};
+    for (let index = 0; index < retained.length; index++) {
+      const backup = retained[index];
+      const monthFolderId = await getBackupMonthFolder(rootFolderId, backup.safeDate);
+      const parents = backup.file.parents || [];
+      if (!parents.includes(monthFolderId)) {
+        await window.gapi.client.drive.files.update({ fileId: backup.file.id, addParents: monthFolderId, removeParents: parents.join(","), fields: "id,parents" });
+      }
+      const slot = index + 1;
+      migratedSlots[String(slot)] = { fileId: backup.file.id, fileName: backup.file.name || backup.entry.fileName, savedAt: backup.savedAt };
+    }
+
+    const latest = retained[retained.length - 1];
+    const manifest = {
+      nextSlot: retained.length < BACKUP_SLOTS ? retained.length + 1 : 1,
+      latestSlot: latest ? retained.length : null,
+      latestSavedAt: latest ? latest.savedAt : "",
+      slots: migratedSlots
+    };
+    await writeManifest(rootFolderId, legacyFile.id, manifest);
   }
 
   async function saveBackup(payload, rootFolderId) {
@@ -171,7 +173,7 @@
     const savedDate = new Date();
     const savedAt = savedDate.toISOString();
     const monthFolderId = await getBackupMonthFolder(rootFolderId, savedDate);
-    const { fileId: manifestFileId, manifest } = await readManifest(monthFolderId);
+    const { fileId: manifestFileId, manifest } = await readManifest(rootFolderId);
     const slot = Number(manifest.nextSlot) >= 1 && Number(manifest.nextSlot) <= BACKUP_SLOTS ? Number(manifest.nextSlot) : 1;
     const old = manifest.slots[String(slot)];
     if (old && old.fileId) {
@@ -186,7 +188,7 @@
       latestSavedAt: savedAt,
       slots: { ...manifest.slots, [String(slot)]: { fileId: backupId, fileName, savedAt } }
     };
-    await writeManifest(monthFolderId, manifestFileId, updated);
+    await writeManifest(rootFolderId, manifestFileId, updated);
   }
 
   async function signIn() {
