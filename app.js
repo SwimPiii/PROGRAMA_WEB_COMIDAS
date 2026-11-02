@@ -38,7 +38,7 @@
     const value = raw && typeof raw === "object" ? raw : {};
     return {
       version: 1,
-      recipes: Array.isArray(value.recipes) ? value.recipes.filter(item => item && item.id && item.name).map(item => ({ id: String(item.id), name: String(item.name), type: item.type === "cena" ? "cena" : "comida", ingredients: Array.isArray(item.ingredients) ? item.ingredients.filter(ing => ing && ing.name).map(ing => ({ name: String(ing.name), grams: Math.max(0, Number(ing.grams) || 0) })) : [], tags: Array.isArray(item.tags) ? item.tags.map(normalizeText).filter(Boolean) : [] })) : [],
+      recipes: Array.isArray(value.recipes) ? value.recipes.filter(item => item && item.id && item.name).map(item => ({ id: String(item.id), name: String(item.name), type: item.type === "cena" ? "cena" : "comida", ingredients: Array.isArray(item.ingredients) ? item.ingredients.filter(ing => ing && ing.name).map(ing => ({ name: String(ing.name), grams: Math.max(0, Number(ing.grams) || 0) })) : [], tags: Array.isArray(item.tags) ? item.tags.map(normalizeText).filter(Boolean) : [], preparation: String(item.preparation || "") })) : [],
       plans: value.plans && typeof value.plans === "object" ? value.plans : {},
       shopping: { extras: Array.isArray(value.shopping && value.shopping.extras) ? value.shopping.extras.filter(item => item && item.id && item.name) : [], checked: value.shopping && value.shopping.checked && typeof value.shopping.checked === "object" ? value.shopping.checked : {} },
       lastUpdated: value.lastUpdated || null
@@ -186,6 +186,7 @@
         renderWeek(); renderShopping(); persist();
       });
     });
+    $$(".meal-view").forEach(button => button.addEventListener("click", () => openRecipeDialog(button.dataset.id)));
     $("#cart-week-title").textContent = `Compra · semana del ${formatDate(weekStart, { day:"numeric", month:"long" })}`;
     $("#cart-week-caption").textContent = `${formatDate(weekStart)} – ${formatDate(end, { day:"numeric", month:"short", year:"numeric" })} · ingredientes de lunes a domingo.`;
   }
@@ -193,7 +194,14 @@
   function mealSlot(date, type, selectedId, weekend) {
     const options = state.recipes.filter(recipe => recipe.type === type).slice().sort((a,b) => a.name.localeCompare(b.name,"es"));
     const chosen = options.some(recipe => recipe.id === selectedId) ? selectedId : "";
-    return `<div class="meal-slot"><label class="meal-label" for="select-${date}-${type}"><span>${type === "comida" ? "☀" : "☾"}</span> ${type}</label><select class="meal-select${chosen ? "" : " empty-select"}" id="select-${date}-${type}" data-date="${date}" data-meal="${type}" aria-label="${type} del ${date}"><option value="">${options.length ? "＋ Elegir plato" : "＋ Añadir platos"}</option>${options.map(recipe => `<option value="${escapeHtml(recipe.id)}" ${recipe.id===chosen?"selected":""}>${escapeHtml(recipe.name)}</option>`).join("")}</select></div>`;
+    return `<div class="meal-slot"><label class="meal-label" for="select-${date}-${type}"><span>${type === "comida" ? "☀" : "☾"}</span> ${type}</label><select class="meal-select${chosen ? "" : " empty-select"}" id="select-${date}-${type}" data-date="${date}" data-meal="${type}" aria-label="${type} del ${date}"><option value="">${options.length ? "＋ Elegir plato" : "＋ Añadir platos"}</option>${options.map(recipe => `<option value="${escapeHtml(recipe.id)}" ${recipe.id===chosen?"selected":""}>${escapeHtml(recipe.name)}</option>`).join("")}</select>${chosen ? `<button class="meal-view" type="button" data-id="${escapeHtml(chosen)}">Ver plato ›</button>` : ""}</div>`;
+  }
+
+  function openRecipeDialog(recipeId) {
+    const recipe = recipeById(recipeId); if (!recipe) return;
+    const ingredients = recipe.ingredients.map(ing => `<li>${escapeHtml(ing.name)}${ing.grams ? ` <span>· ${formatQuantity(ing.grams)} g</span>` : ""}</li>`).join("");
+    $("#recipe-dialog-body").innerHTML = `<span class="type-badge ${recipe.type === "cena" ? "dinner" : ""}">${recipe.type}</span><h3 id="recipe-dialog-title">${escapeHtml(recipe.name)}</h3><h4>Ingredientes</h4><ul class="dialog-ingredients">${ingredients || "<li>Sin ingredientes</li>"}</ul>${recipe.tags.length ? `<h4>Etiquetas de exclusión</h4><div class="tag-list">${recipe.tags.map(tag => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}<h4>Preparación</h4>${recipe.preparation.trim() ? `<p class="dialog-preparation">${escapeHtml(recipe.preparation)}</p>` : `<p class="muted-small">Aún no hay preparación para este plato. Añádela desde «Listado platos» → Editar.</p>`}`;
+    $("#recipe-dialog").showModal();
   }
 
   function recipeById(recipeId) { return state.recipes.find(recipe => recipe.id === recipeId); }
@@ -236,7 +244,7 @@
   function editRecipe(recipeId) {
     if (!requireEditing()) return;
     const recipe = recipeById(recipeId); if (!recipe) return;
-    $("#recipe-id").value = recipe.id; $("#recipe-name").value = recipe.name; $("#exclusion-tags").value = recipe.tags.join(", ");
+    $("#recipe-id").value = recipe.id; $("#recipe-name").value = recipe.name; $("#exclusion-tags").value = recipe.tags.join(", "); $("#recipe-preparation").value = recipe.preparation || "";
     $(`input[name="meal-type"][value="${recipe.type}"]`).checked = true;
     $("#ingredient-rows").innerHTML = ""; (recipe.ingredients.length ? recipe.ingredients : [{}]).forEach(addIngredientRow);
     $("#form-heading").textContent = "Editar plato"; $("#save-recipe").textContent = "Guardar cambios"; $("#cancel-edit").hidden = false;
@@ -258,7 +266,7 @@
     if (!ingredients.length) { showToast("Añade al menos un ingrediente."); $(".ingredient-name").focus(); return; }
     const duplicate = state.recipes.find(recipe => normalizeText(recipe.name) === normalizeText(name) && recipe.id !== $("#recipe-id").value);
     if (duplicate) { showToast("Ya existe un plato con ese nombre."); return; }
-    const recipe = { id: $("#recipe-id").value || id(), name, type: $("input[name='meal-type']:checked").value, ingredients, tags: $("#exclusion-tags").value.split(",").map(normalizeText).filter(Boolean) };
+    const recipe = { id: $("#recipe-id").value || id(), name, type: $("input[name='meal-type']:checked").value, ingredients, tags: $("#exclusion-tags").value.split(",").map(normalizeText).filter(Boolean), preparation: $("#recipe-preparation").value.trim() };
     const index = state.recipes.findIndex(item => item.id === recipe.id);
     if (index >= 0) {
       state.recipes[index] = recipe;
@@ -370,6 +378,8 @@
     $("#recipe-form").addEventListener("submit",onRecipeSubmit); $("#cancel-edit").addEventListener("click",resetRecipeForm);
     $(".filter-pills").addEventListener("click",event=>{const button=event.target.closest("[data-filter]");if(!button)return;recipeFilter=button.dataset.filter;$$('.filter-pill').forEach(pill=>pill.classList.toggle("active",pill===button));renderRecipes();});
     $("#shopping-form").addEventListener("submit",addShoppingItem);
+    $("#recipe-dialog-close").addEventListener("click",()=>$("#recipe-dialog").close());
+    $("#recipe-dialog").addEventListener("click",event=>{if(event.target===event.currentTarget)event.currentTarget.close();});
     $("#cart-go-week").addEventListener("click",()=>switchPanel("plan"));
     addIngredientRow(); $("#connection-notice").classList.add("visible");
     try { if (localStorage.getItem(DEMO_STORAGE_KEY)) $("#demo-button").textContent = "Continuar prueba local"; } catch { /* almacenamiento no disponible */ }
